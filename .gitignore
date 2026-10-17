@@ -1,0 +1,15 @@
+/*
+!/.gitignore
+!/.python-version
+!/README.md
+!/CONTRIBUTING.md
+!/LICENSE
+!/pyproject.toml
+!/uv.lock
+!/osu_toolbox/
+!/tests/
+!/assets/
+
+__pycache__/
+*.py[cod]
+node_modules/

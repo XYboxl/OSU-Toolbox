@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">OSU 工具箱</title>
+  <desc id="desc">粉紫相间的四块圆角拼片，围成规整的方形。</desc>
+  <g fill="none" stroke-width="52" stroke-linecap="round" stroke-linejoin="round">
+    <path stroke="#9088DD" d="M222 122H186A64 64 0 0 0 122 186V222"/>
+    <path stroke="#F079AA" d="M222 122H186A64 64 0 0 0 122 186V222" transform="rotate(90 256 256)"/>
+    <path stroke="#9088DD" d="M222 122H186A64 64 0 0 0 122 186V222" transform="rotate(180 256 256)"/>
+    <path stroke="#F079AA" d="M222 122H186A64 64 0 0 0 122 186V222" transform="rotate(270 256 256)"/>
+  </g>
+</svg>

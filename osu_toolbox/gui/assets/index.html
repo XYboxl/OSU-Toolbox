@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>--</title>
+  <link rel="stylesheet" href="style.css?v=10">
+</head>
+<body>
+  <div id="app" class="app-shell" aria-busy="true">
+    <header class="app-header">
+      <div>
+        <div id="project-name" class="brand">--</div>
+        <div id="project-tagline" class="brand-subtitle">--</div>
+      </div>
+      <div id="header-status" class="status-pill" data-state="ready">就绪</div>
+    </header>
+
+    <main>
+      <section id="dashboard-page" class="page dashboard-page">
+        <div class="page-heading">
+          <h1>工具</h1>
+          <p>选择一个工具开始处理。</p>
+        </div>
+        <div class="dashboard-main">
+          <div id="tool-list" class="tool-list"></div>
+          <p id="project-future-note" class="future-note">--</p>
+        </div>
+        <footer class="dashboard-footer">
+          <button id="settings-link" class="about-link" type="button">设置</button>
+          <button id="about-link" class="about-link" type="button">关于本项目</button>
+        </footer>
+      </section>
+
+      <section id="tool-page" class="page tool-page" hidden>
+        <div class="tool-toolbar">
+          <button id="back-button" class="button button-secondary" type="button">返回主控台</button>
+          <div>
+            <h1 id="tool-title">--</h1>
+            <p id="tool-description">--</p>
+          </div>
+        </div>
+
+        <form id="tool-form" novalidate>
+          <div id="form-groups"></div>
+          <section class="run-panel" aria-labelledby="run-title">
+            <div class="run-panel-header">
+              <div>
+                <h2 id="run-title">任务</h2>
+                <p id="task-stage">等待开始</p>
+              </div>
+              <div class="run-actions">
+                <button id="start-button" class="button button-primary" type="submit">开始</button>
+                <button id="cancel-button" class="button button-danger" type="button" hidden>取消任务</button>
+              </div>
+            </div>
+            <div class="progress-track" aria-label="任务进度">
+              <div id="progress-bar" class="progress-bar"></div>
+            </div>
+            <div id="result-panel" class="result-panel" hidden>
+              <div class="result-label">结果</div>
+              <div id="result-content" class="result-content"></div>
+            </div>
+            <div class="log-header">
+              <span>日志</span>
+              <button id="clear-log-button" class="text-button" type="button">清空</button>
+            </div>
+            <pre id="log-output" class="log-output" aria-live="polite"></pre>
+          </section>
+        </form>
+      </section>
+
+      <section id="settings-page" class="page settings-page" hidden>
+        <div class="settings-toolbar">
+          <button id="settings-back-button" class="button button-secondary" type="button">返回主控台</button>
+          <div>
+            <h1>设置</h1>
+          </div>
+        </div>
+        <div class="settings-layout">
+          <nav id="settings-categories" class="settings-categories" aria-label="设置分类"></nav>
+          <form id="settings-form" class="settings-form" novalidate>
+            <div id="settings-content"></div>
+            <div class="settings-actions">
+              <button id="save-settings-button" class="button button-primary" type="submit">保存</button>
+              <button id="reset-settings-button" class="button button-danger" type="button">恢复到默认</button>
+              <button id="repair-shell-menu-button" class="button button-secondary" type="button" hidden>修复右键菜单</button>
+              <button id="uninstall-shell-menu-button" class="button button-danger" type="button" hidden>卸载右键菜单</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section id="about-page" class="page about-page" hidden>
+        <div class="about-toolbar">
+          <button id="about-back-button" class="button button-secondary" type="button">返回主控台</button>
+          <div>
+            <h1>关于本项目</h1>
+            <p id="about-summary">--</p>
+          </div>
+        </div>
+        <div class="about-content">
+          <div class="about-kicker">项目资料</div>
+          <h2 id="about-name">--</h2>
+          <p id="about-focus" class="about-description">--</p>
+          <div class="project-status">
+            <span class="project-status-dot"></span>
+            <span id="about-status">--</span>
+          </div>
+          <dl class="about-meta">
+            <div>
+              <dt>作者</dt>
+              <dd id="about-author">--</dd>
+            </div>
+            <div>
+              <dt>QQ</dt>
+              <dd id="about-qq">--</dd>
+            </div>
+            <div>
+              <dt>邮箱</dt>
+              <dd><a id="about-email" href="">--</a></dd>
+            </div>
+            <div>
+              <dt>版本</dt>
+              <dd id="about-version">--</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+  <div id="confirm-dialog" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">请确认</h2>
+      <p id="confirm-message"></p>
+      <div class="modal-actions">
+        <button id="confirm-cancel" class="button button-secondary" type="button">取消</button>
+        <button id="confirm-accept" class="button button-danger-solid" type="button">继续</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=12"></script>
+</body>
+</html>

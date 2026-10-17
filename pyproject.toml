@@ -1,0 +1,31 @@
+[project]
+name = "osu-toolbox"
+version = "0.3.2"
+description = "OSU 工具箱"
+authors = [
+    { name = "Difficile", email = "xyboxl@163.com" },
+]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=2.0.2",
+    "pygame>=2.6.1",
+    "pyopengl>=3.1.10",
+    "pywebview>=5.4,<7.0",
+]
+
+[project.scripts]
+osu-toolbox = "osu_toolbox.gui.app:main"
+osu-toolbox-menu = "osu_toolbox.launcher:main"
+osu-toolbox-render = "osu_toolbox.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# 标准 flat-layout：包位于 osu_toolbox/ 子目录（包名即目录名），
+# 显式声明避免自动发现歧义；editable 安装把包映射到源码目录。
+packages = ["osu_toolbox"]
