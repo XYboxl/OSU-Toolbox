@@ -129,19 +129,29 @@ class SpeedFolderConsistencyTests(unittest.TestCase):
                     self.assertEqual(result.data["errors"], [])
                     self.assertEqual(_original_tree(source), before)
                     tree = _result_tree(destination)
-                    self.assertEqual(set(tree), set(before))
+                    renamed = {
+                        "Alpha/hard.osu": "Alpha/hard [rate 1.1].osu",
+                        "Alpha/song.wav": "Alpha/song [rate 1.1].wav",
+                        "Alpha/0/0.mc": "Alpha/0/0 [rate 1.1].mc",
+                        "Alpha/chart.sm": "Alpha/chart [rate 1.1].sm",
+                        "Alpha/pack.osz": "Alpha/pack [rate 1.1].osz",
+                        "Alpha/pack.mcz": "Alpha/pack [rate 1.1].mcz",
+                        "Beta/hard.osu": "Beta/hard [rate 1.1].osu",
+                        "Beta/song.wav": "Beta/song [rate 1.1].wav",
+                    }
+                    self.assertEqual(set(tree), {renamed.get(name, name) for name in before})
                     if expected is None:
                         expected = tree
                     else:
                         self.assertEqual(tree, expected)
-                    osu = (destination / "Alpha" / "hard.osu").read_text(encoding="utf-8")
+                    osu = (destination / "Alpha" / "hard [rate 1.1].osu").read_text(encoding="utf-8")
                     self.assertIn("Title:T (1.1x)", osu)
                     self.assertIn("TitleUnicode:歌曲 (1.1x)", osu)
                     self.assertIn("Version:Hard (1.1x)", osu)
-                    self.assertIn("AudioFilename: song.wav", osu)
-                    mc = json.loads((destination / "Alpha" / "0" / "0.mc").read_text(encoding="utf-8"))
+                    self.assertIn("AudioFilename: song [rate 1.1].wav", osu)
+                    mc = json.loads((destination / "Alpha" / "0" / "0 [rate 1.1].mc").read_text(encoding="utf-8"))
                     self.assertEqual(mc["meta"]["song"]["title"], "T (1.1x)")
-                    self.assertEqual(mc["meta"]["song"]["file"], "../song.wav")
+                    self.assertEqual(mc["meta"]["song"]["file"], "../song [rate 1.1].wav")
                     self.assertEqual(mc["meta"]["version"], "Hard (1.1x)")
 
     def test_batch_reserves_same_named_folder_outputs_before_any_write(self):
@@ -163,9 +173,9 @@ class SpeedFolderConsistencyTests(unittest.TestCase):
                     result = controller.run(prepared, lambda *_: None)
                 self.assertEqual(result.data["paths"], expected)
                 for title, path in zip(("A", "B"), expected):
-                    text = (Path(path) / "hard.osu").read_text(encoding="utf-8")
+                    text = (Path(path) / "hard 1.1x.osu").read_text(encoding="utf-8")
                     self.assertIn(f"Title:{title} 1.1x", text)
-                    self.assertTrue((Path(path) / "song.wav").is_file())
+                    self.assertTrue((Path(path) / "song 1.1x.wav").is_file())
                 self.assertEqual((output / "Song 1.1x").read_bytes(), b"occupied")
 
     def test_overlapping_folders_and_explicit_inside_files_are_processed_once(self):
@@ -184,7 +194,10 @@ class SpeedFolderConsistencyTests(unittest.TestCase):
             self.assertEqual(audio.call_count, 1)
             self.assertEqual(_original_tree(selected), before)
             destination = root / "Library 1.1x"
-            self.assertEqual(set(_original_tree(destination)), set(before))
+            self.assertEqual(set(_original_tree(destination)), {
+                "Song", "Song/Empty", "Song/Empty/Nested",
+                "Song/hard 1.1x.osu", "Song/song 1.1x.wav",
+            })
 
     def test_case_aliases_of_a_folder_do_not_allocate_two_copies(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -221,17 +234,17 @@ class SpeedFolderConsistencyTests(unittest.TestCase):
                 result = controller.run(prepared, lambda *event: events.append(event))
             self.assertEqual(result.data["paths"], expected)
             self.assertEqual(result.data["errors"], [])
-            folder_text = (root / "Folder [1.1x]" / "hard.osu").read_text(encoding="utf-8")
+            folder_text = (root / "Folder [1.1x]" / "hard [1.1x].osu").read_text(encoding="utf-8")
             self.assertIn("Title:Folder [1.1x]", folder_text)
             self.assertIn("Version:Hard [1.1x]", folder_text)
-            self.assertIn("AudioFilename: song.wav", folder_text)
+            self.assertIn("AudioFilename: song [1.1x].wav", folder_text)
             loose_text = Path(expected[1]).read_text(encoding="utf-8")
             self.assertIn("Title:Loose\n", loose_text)
             self.assertIn("Version:Hard\n", loose_text)
             self.assertIn("AudioFilename: song [1.1x].wav", loose_text)
             with zipfile.ZipFile(expected[2]) as packed:
-                self.assertEqual(set(packed.namelist()), {"hard.osu", "song.wav"})
-                self.assertIn("Title:T [1.1x]", packed.read("hard.osu").decode("utf-8"))
+                self.assertEqual(set(packed.namelist()), {"hard [1.1x].osu", "song [1.1x].wav"})
+                self.assertIn("Title:T [1.1x]", packed.read("hard [1.1x].osu").decode("utf-8"))
             progress = [value["fraction"] for kind, value in events if kind == "progress"]
             self.assertEqual(progress, sorted(progress))
             self.assertEqual(progress[-1], 1.0)
@@ -340,11 +353,11 @@ class SpeedFolderConsistencyTests(unittest.TestCase):
                 ], capture_output=True, check=True, timeout=20)
                 self.assertTrue(decoded.stdout)
                 return len(decoded.stdout) / (2 * 44100)
-            self.assertAlmostEqual(duration(template / "song.wav") / duration(outputs[0] / "song.wav"),
+            self.assertAlmostEqual(duration(template / "song.wav") / duration(outputs[0] / "song 1.1x.wav"),
                                    1.1, delta=0.015)
-            text = (outputs[0] / "hard.osu").read_text(encoding="utf-8")
+            text = (outputs[0] / "hard 1.1x.osu").read_text(encoding="utf-8")
             self.assertIn("64,192,909,", text)
-            self.assertIn("AudioFilename: song.wav", text)
+            self.assertIn("AudioFilename: song 1.1x.wav", text)
 
 
 if __name__ == "__main__":

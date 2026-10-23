@@ -1,6 +1,6 @@
 [project]
 name = "osu-toolbox"
-version = "0.3.2"
+version = "0.3.3"
 description = "OSU 工具箱"
 authors = [
     { name = "Difficile", email = "xyboxl@163.com" },

@@ -397,8 +397,19 @@ def transform_osu_text(text, speed, *, difficulty_marker="", song_marker=None):
                 )
     for index in sections.get("Metadata", ()):
         match = _MD_NUMBER_LINE.match(lines[index].strip())
-        if match and match.group(1) == "Version":
+        if not match:
+            continue
+        key = match.group(1)
+        if key == "Version":
             info["version"] = match.group(2).strip()
+        elif key in ("BeatmapID", "BeatmapSetID"):
+            # A speed-changed copy must not identify itself as the online original.
+            value = "0" if key == "BeatmapID" else "-1"
+            lines[index] = re.sub(
+                rf"^(\s*{key}\s*:\s*).*$",
+                lambda found: f"{found.group(1)}{value}",
+                lines[index],
+            )
     if difficulty_marker and info["version"]:
         _append_osu_field_value(lines, "Version", difficulty_marker)
     for key in ("Title", "TitleUnicode"):
@@ -1174,6 +1185,27 @@ def _archive_member_name(path, marker):
     return f"{directory}/{renamed}" if directory else renamed
 
 
+def _archive_output_members(root, original, entries, audio, file_marker):
+    """Reserve distinct chart/music names while leaving other members intact."""
+    root = Path(root).resolve()
+    original_paths = {
+        (root / name.replace("\\", "/")).resolve(): name
+        for name in original if name and not name.endswith("/")
+    }
+    taken = {
+        _output_key(path, root) for path in original_paths
+        if file_marker in path.stem
+    }
+    reserve = _unique_path_for(taken, root, file_marker)
+    outputs = {}
+    for path in [*sorted(audio), *(chart for chart, _scaled, _reference in entries)]:
+        target = reserve(path)
+        outputs[path] = re.sub(
+            r"[^/\\]+$", lambda _match: target.name, original_paths[path]
+        )
+    return outputs
+
+
 def _marked_file_stem(name, marker, existing=()):
     """Append a marker once, protecting names already present in the source."""
     stem = Path(name).stem
@@ -1362,26 +1394,34 @@ def _plan_collection(
     )
     plan = []
     for group, destination in layout:
-        file_marker = "" if group.get("source_folder") else format_file_marker(file_pattern, speed)
+        file_marker = format_file_marker(file_pattern, speed)
         song_root = Path(group["parent"])
+        taken = {
+            name for name in _source_names(group, song_root)
+            if file_marker in Path(name).stem
+        }
+        reserve = _unique_path_for(taken, destination, file_marker)
+        audio_names = {}
         rows = [("变速文件夹" if group.get("source_folder") else "歌曲文件夹", str(destination))]
-        for chart, selection in group["charts"]:
-            relative = _song_item_path(chart, selection, song_root, destination)
-            rows.append((
-                "谱面",
-                str(relative.with_name(
-                    f"{relative.stem}{file_marker}{relative.suffix}"
-                )),
-            ))
         for archive, selection in group["archives"]:
             relative = _song_item_path(archive, selection, song_root, destination)
-            rows.append((
-                "归档",
-                str(relative.with_name(
-                    f"{relative.stem}{file_marker}{relative.suffix}"
-                )),
-            ))
+            rows.append(("归档", str(reserve(relative))))
+        for chart, selection in group["charts"]:
+            relative = _song_item_path(chart, selection, song_root, destination)
+            text, _bom = _read_chart_text(chart)
+            _scaled, info = transform_chart_text(text, chart.suffix, speed)
+            reference = info.get("audio_filename") or ""
+            reference_root = _collection_reference_root(
+                chart, reference, song_root, group.get("source_folder")
+            )
+            _marked_audio_reference(
+                chart, reference, speed, file_marker,
+                (Path(selection), song_root, destination), audio_names, reserve,
+                reference_root=reference_root,
+            )
+            rows.append(("谱面", str(reserve(relative))))
         if include_audio:
+            rows.extend(("音乐", str(target)) for target in audio_names.values())
             rows.append(("其它文件", "原文件夹内容一并复制"))
         plan.append({
             "source": str(song_root),
@@ -1449,14 +1489,20 @@ def plan_speed_change(
             if include_audio:
                 with tempfile.TemporaryDirectory(prefix="osu-toolbox-speed-plan-") as root:
                     _extract_archive_file(source, root)
-                    for chart in _discover_archive(root):
-                        text, _bom = _read_chart_text(chart)
-                        _scaled, info = transform_chart_text(
-                            text, chart.suffix, speed, difficulty_marker=difficulty_marker
+                    entries, audio = _archive_chart_entries(
+                        _discover_archive(root), speed, difficulty_marker, root
+                    )
+                    with zipfile.ZipFile(source) as archive:
+                        members = _archive_output_members(
+                            root, archive.namelist(), entries, audio, marker
                         )
-                        reference = info.get("audio_filename") or ""
-                        if reference and is_audio(_resource_archive_name(reference)):
-                            rows.append(("音乐", f"（归档内）{reference}"))
+                    rows.extend(
+                        ("谱面", f"（归档内）{members[chart]}")
+                        for chart, _scaled, _reference in entries
+                    )
+                    rows.extend(
+                        ("音乐", f"（归档内）{members[track]}") for track in sorted(audio)
+                    )
             storyboards = _archive_storyboard_names(source)
             rows.extend(
                 ("故事板", f"（归档内）{name}（未变速）") for name in storyboards
@@ -1671,8 +1717,8 @@ def _write_speed_changed_archive(
 ):
     """Write ``source`` into a new archive at ``destination``.
 
-    Every chart and its referenced music are speed-changed. Member names and
-    paths stay intact, and unreferenced resources are copied unchanged.
+    Every chart and its referenced music are speed-changed and renamed together.
+    Directory paths and unreferenced resources are preserved.
     """
     _check_cancelled(cancel_event)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1693,6 +1739,8 @@ def _write_speed_changed_archive(
                 warnings.append(message)
                 _log_failure(emit_event, message)
         used_names = set()
+        handled_names = set()
+        renamed_audio = {}
         with zipfile.ZipFile(source) as source_archive:
             original = source_archive.namelist()
             original_paths = {
@@ -1700,13 +1748,16 @@ def _write_speed_changed_archive(
                 .relative_to(Path(root).resolve()).as_posix().casefold(): name
                 for name in original if name and not name.endswith("/")
             }
+            output_members = _archive_output_members(
+                root, original, entries, audio, file_marker
+            )
             storyboards = _archive_storyboard_members(
                 [chart.stem for chart, _scaled, _reference in entries], original
             )
             for member in storyboards.values():
                 assets.append({"kind": "storyboard", "path": member, "name": member})
             with zipfile.ZipFile(archive_target, "w", zipfile.ZIP_DEFLATED) as out_archive:
-                # Converted music replaces the original member at the same path.
+                # Each shared track is written once under its reserved new name.
                 for order, audio_source in enumerate(sorted(audio)):
                     _check_cancelled(cancel_event)
                     stage = Path(root) / f".speed-audio-{order}{audio_source.suffix}"
@@ -1722,15 +1773,30 @@ def _write_speed_changed_archive(
                         _log_failure(emit_event, message)
                         _remove_partial(stage)
                         continue
-                    member = original_paths[audio_source.relative_to(root).as_posix().casefold()]
+                    original_member = original_paths[
+                        audio_source.relative_to(root).as_posix().casefold()
+                    ]
+                    handled_names.add(original_member.casefold())
+                    member = output_members[audio_source]
                     used_names.add(member.casefold())
                     with stage.open("rb") as audio_input, out_archive.open(member, "w") as audio_output:
                         shutil.copyfileobj(audio_input, audio_output)
+                    renamed_audio[audio_source] = Path(root) / member.replace("\\", "/")
                     audio_details.append(("音乐", f"（归档内）{member}"))
                     _log(emit_event, f"音乐已变速（归档内）：{member}")
                 for chart, scaled, reference in entries:
                     _check_cancelled(cancel_event)
-                    member = original_paths[chart.relative_to(root).as_posix().casefold()]
+                    original_member = original_paths[chart.relative_to(root).as_posix().casefold()]
+                    handled_names.add(original_member.casefold())
+                    member = output_members[chart]
+                    audio_source = _resolve_reference(chart, reference, root)
+                    if audio_source in renamed_audio:
+                        marked_reference = os.path.relpath(
+                            renamed_audio[audio_source], chart.parent
+                        ).replace("\\", "/")
+                        scaled = _rewrite_audio_reference(
+                            scaled, chart.suffix, reference, marked_reference
+                        )
                     used_names.add(member.casefold())
                     out_archive.writestr(member, scaled)
                     chart_details.append(("谱面", f"（归档内）{member}"))
@@ -1738,7 +1804,7 @@ def _write_speed_changed_archive(
                 for name in original:
                     if not name:
                         continue
-                    if name.casefold() in used_names:
+                    if name.casefold() in handled_names:
                         continue
                     info = source_archive.getinfo(name)
                     out_archive.writestr(info, source_archive.read(name))
@@ -2303,7 +2369,7 @@ def _collection_chart_job(
     # run, so its name is reserved.  Nothing else is: two charts in different
     # subfolders legitimately produce the same file name, and that is what the
     # destination's own structure keeps apart.
-    taken = set(folder.get("marked_names") or ())
+    taken = folder.setdefault("taken", set(folder.get("marked_names") or ()))
     unique = _unique_path_for(taken, destination_root, file_marker)
 
     destination_root.mkdir(parents=True, exist_ok=True)
@@ -2333,11 +2399,9 @@ def _collection_chart_job(
             song_marker=song_marker,
         )
         reference = probe.get("audio_filename") or ""
-        reference_root = placement[1]
-        if folder.get("source_folder"):
-            reference_stop = _reference_stop(chart, reference)
-            if reference_stop != reference_root and reference_root not in reference_stop.parents:
-                reference_root = reference_stop
+        reference_root = _collection_reference_root(
+            chart, reference, placement[1], folder.get("source_folder")
+        )
         marked_reference = _marked_audio_reference(
             chart, reference, speed, file_marker, placement, audio_names, unique,
             reference_root=reference_root if folder.get("source_folder") else None,
@@ -2407,6 +2471,15 @@ def _collection_chart_job(
     for message in entry["warnings"]:
         _log_failure(emit_event, message)
     return entry, audio_jobs, plans
+
+
+def _collection_reference_root(chart, reference, song_root, source_folder):
+    """Include parent music when a complete numbered storage folder is copied."""
+    if source_folder:
+        reference_stop = _reference_stop(chart, reference)
+        if reference_stop != song_root and song_root not in reference_stop.parents:
+            return reference_stop
+    return song_root
 
 
 def _marked_chart_path(chart, placement, destination_root, file_marker):
@@ -2617,9 +2690,13 @@ def _archive_folder_job(folder, job, speed, patterns, registry, cancel_event, em
     archive, selection = job
     destination_root = Path(folder["destination"])
     song_root = Path(folder["source"])
-    destination = _song_item_path(
+    reserve = _unique_path_for(
+        folder.setdefault("taken", set(folder.get("marked_names") or ())),
+        destination_root, patterns["file_marker"],
+    )
+    destination = reserve(_song_item_path(
         archive, selection, song_root, destination_root
-    ).with_name(f"{archive.stem}{patterns['file_marker']}{archive.suffix}")
+    ))
     destination.parent.mkdir(parents=True, exist_ok=True)
     entry = _write_speed_changed_archive(
         folder["index"],
@@ -2684,8 +2761,8 @@ def _change_speed_to_collection(
 ):
     """Transform complete folder copies and optional single-file collections.
 
-    Selected folders keep their entire tree and internal names. Direct files
-    can share a song collection or retain their normal per-file outputs.
+    Selected folders keep their entire tree, marking chart and music names.
+    Direct files can share a song collection or retain their normal per-file outputs.
     All folder tracks use one pool, sized by work rather than folder count;
     charts are written only after their audio tasks have finished.
     """
@@ -2695,7 +2772,7 @@ def _change_speed_to_collection(
             if difficulty_marker and str(difficulty_pattern or "").strip()
             else ""
         ),
-        "file_marker": "" if source_folder else format_file_marker(file_pattern, speed),
+        "file_marker": format_file_marker(file_pattern, speed),
     }
     root, layout, owners, loose = _collection_layout(
         sources, output_folder, folders_selected, source_folder, folder_outputs
@@ -2722,7 +2799,6 @@ def _change_speed_to_collection(
         folder_source = group.get("source_folder")
         folder_patterns = dict(patterns)
         if folder_source:
-            folder_patterns["file_marker"] = ""
             if difficulty_marker and not folder_patterns["difficulty_marker"]:
                 folder_patterns["difficulty_marker"] = format_difficulty_marker(file_pattern, speed)
         folders.append({
@@ -2796,16 +2872,11 @@ def _change_speed_to_collection(
         # hand to the shared pool.  A song holding both archives and plain charts
         # gets both: the archives are written, then the charts are read and their
         # tracks queued, and the tree is copied once afterwards.
-        # A leftover that already carries the marker is an earlier result, not an
-        # input: repacking it would stack a second marker on the name (`pack 1.5x
-        # 1.5x.mcz`), and it is the copy guard's job to keep it off the fresh one.
-        marked = set(folder.get("marked_names") or ())
         written = [
             _archive_folder_job(
                 folder, job, speed, patterns, registry, cancel_event, emit_event
             )
             for job in folder["archives"]
-            if _output_key(job[0], Path(folder["source"])) not in marked
         ]
         charts = folder["charts"]
         if charts:
@@ -2995,7 +3066,7 @@ def change_speed(
     By default files gain marked names beside their sources. The optional
     output_directory relocates them. output_folder collects directly selected
     files into song folders. folder_outputs maps each complete folder selection
-    to its exact new destination, preserving its internal names and structure.
+    to its exact new destination, preserving structure and marking chart/music names.
     source_folder is the single-folder form with an exact output_folder.
     """
     speed = normalized_speed(speed)

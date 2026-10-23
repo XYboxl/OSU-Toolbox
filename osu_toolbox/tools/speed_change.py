@@ -71,7 +71,7 @@ SPEED_CHANGE_PARAMS = (
     ),
     ParamSpec(
         "input_folders", "文件夹", "path", None, "input",
-        "另存完整副本，内部文件名不变；可多选，与文件输入合并，至少填一个",
+        "另存完整副本，内部谱面和音乐文件名追加变速标识；可多选，与文件输入合并，至少填一个",
         persist=False, dialog_mode="folder", multiple=True,
         placeholder="可多选；为每个文件夹生成完整变速副本",
     ),

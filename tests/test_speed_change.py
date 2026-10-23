@@ -152,6 +152,18 @@ class SpeedValidationTests(unittest.TestCase):
 
 
 class OsuTimelineTests(unittest.TestCase):
+    def test_speed_changed_chart_does_not_keep_the_original_online_ids(self):
+        text = _osu_text().replace(
+            "Version:Hard", "Version:Hard\nBeatmapID: 123456\nBeatmapSetID: 654321"
+        )
+        for speed in (0.9, 1.5):
+            with self.subTest(speed=speed):
+                scaled, _info = transform_osu_text(text, speed)
+                self.assertIn("BeatmapID: 0\n", scaled)
+                self.assertIn("BeatmapSetID: -1\n", scaled)
+                self.assertNotIn("123456", scaled)
+                self.assertNotIn("654321", scaled)
+
     def test_every_absolute_time_shrinks_by_the_multiplier(self):
         """Times shrink with the music, which is resampled to 1/speed of its length.
 
@@ -776,6 +788,10 @@ class SpeedChangeFileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             chart, audio = self._write_song(root)
+            original = chart.read_text(encoding="utf-8").replace(
+                "Version:Hard", "Version:Hard\nBeatmapID:123456\nBeatmapSetID:654321"
+            )
+            chart.write_text(original, encoding="utf-8")
             self._make_audio(audio)
             outcome = change_speed(
                 [chart], 1.5,
@@ -788,11 +804,13 @@ class SpeedChangeFileTests(unittest.TestCase):
             self.assertTrue(marked_chart.is_file())
             self.assertTrue(marked_audio.is_file())
             # The source is untouched.
-            self.assertEqual(chart.read_text(encoding="utf-8"), _osu_text(audio="song.wav"))
+            self.assertEqual(chart.read_text(encoding="utf-8"), original)
             text = marked_chart.read_text(encoding="utf-8")
             self.assertIn("AudioFilename: song 1.5x.wav", text)
             self.assertIn("Version:Hard 1.5x", text)
             self.assertIn("AudioLeadIn: 667", text)
+            self.assertIn("BeatmapID:0", text.splitlines())
+            self.assertIn("BeatmapSetID:-1", text.splitlines())
             # A chart named directly keeps the song name it was authored with:
             # only the file name and the difficulty name say it changed.
             self.assertIn("Title:T\n", text)
@@ -968,12 +986,12 @@ class SpeedChangeFileTests(unittest.TestCase):
                 self.assertEqual(
                     names,
                     [
-                        "bg.jpg", "easy.osu", "hard.osu",
-                        "readme.txt", "song.wav",
+                        "bg.jpg", "easy 1.5x.osu", "hard 1.5x.osu",
+                        "readme.txt", "song 1.5x.wav",
                     ],
                 )
-                chart = archive.read("easy.osu").decode("utf-8")
-                self.assertIn("AudioFilename: song.wav", chart)
+                chart = archive.read("easy 1.5x.osu").decode("utf-8")
+                self.assertIn("AudioFilename: song 1.5x.wav", chart)
                 self.assertIn("Version:Easy 1.5x", chart)
                 self.assertIn("AudioLeadIn: 667", chart)
                 # An archive is a pack of songs, so its members mark the song
@@ -983,7 +1001,7 @@ class SpeedChangeFileTests(unittest.TestCase):
                 self.assertEqual(archive.read("readme.txt"), b"readme")
                 self.assertEqual(archive.read("bg.jpg"), b"image")
 
-    def test_archive_preserves_member_names_and_marks_metadata_with_the_fallback(self):
+    def test_archive_marks_member_names_and_metadata_with_the_fallback(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "pack.mcz"
@@ -1006,8 +1024,8 @@ class SpeedChangeFileTests(unittest.TestCase):
             self.assertEqual(outcome["failures"], [])
             with zipfile.ZipFile(root / "pack_1.5x.mcz") as archive:
                 names = archive.namelist()
-                self.assertEqual(names, ["song.mc"])
-                payload = json.loads(archive.read("song.mc"))
+                self.assertEqual(names, ["song_1.5x.mc"])
+                payload = json.loads(archive.read("song_1.5x.mc"))
             # Archives always mark both metadata fields, using the container marker as fallback.
             self.assertEqual(payload["meta"]["version"], "Hard_1.5x")
             self.assertEqual(payload["meta"]["song"]["title"], "T_1.5x")
@@ -1761,18 +1779,17 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             self.assertEqual(
                 sorted(item.name for item in out.iterdir()), ["Ghost", "Odo 1.5x"]
             )
-            # The whole folder travels along, structure included, and the
-            # folder copy keeps the internal chart and music names.
+            # The folder structure survives while charts and music gain the marker.
             self.assertEqual(
                 sorted(item.name for item in (out / "Odo 1.5x").iterdir()),
                 [
-                    "Easy.osu", "Hard.osu", "audio.mp3",
+                    "Easy 1.5x.osu", "Hard 1.5x.osu", "audio 1.5x.mp3",
                     "cover.jpg", "readme.txt", "sub",
                 ],
             )
             self.assertTrue((out / "Odo 1.5x" / "sub" / "extra.png").is_file())
-            text = (out / "Odo 1.5x" / "Hard.osu").read_text(encoding="utf-8")
-            self.assertIn("AudioFilename: audio.mp3", text)
+            text = (out / "Odo 1.5x" / "Hard 1.5x.osu").read_text(encoding="utf-8")
+            self.assertIn("AudioFilename: audio 1.5x.mp3", text)
             self.assertIn("Version:Hard 1.5x", text)
             # A chart reached through the selected folder marks the song name.
             self.assertIn("Title:Odo 1.5x", text)
@@ -1873,8 +1890,7 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
 
         Malody stores a song both loose and packed (``Song/0.mc`` next to
         ``Song.mcz``).  Selecting the folder must speed-change both: the loose
-        charts are rewritten and the copied archive keeps its name while its
-        metadata carries the marker while member names survive. The source archive is never touched.
+        charts, music and archives gain the marker. The source is untouched.
         """
         import zipfile
 
@@ -1902,15 +1918,14 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             controller.run(prepared, lambda *_args: None)
 
             result = out / "Odo 1.5x"
-            self.assertTrue((result / "Hard.osu").is_file())
-            self.assertTrue((result / "audio.mp3").is_file())
-            # The copied archive keeps its name and preserves member names.
-            self.assertFalse((result / "pack 1.5x.mcz").exists())
-            repacked = result / "pack.mcz"
+            self.assertTrue((result / "Hard 1.5x.osu").is_file())
+            self.assertTrue((result / "audio 1.5x.mp3").is_file())
+            self.assertFalse((result / "pack.mcz").exists())
+            repacked = result / "pack 1.5x.mcz"
             self.assertTrue(repacked.is_file())
             with zipfile.ZipFile(repacked) as handle:
                 self.assertEqual(
-                    sorted(handle.namelist()), ["audio.mp3", "song.mc"]
+                    sorted(handle.namelist()), ["audio 1.5x.mp3", "song 1.5x.mc"]
                 )
             # The source archive keeps its bytes and its member names.
             self.assertEqual(archive.read_bytes(), before)
@@ -1918,7 +1933,7 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
                 self.assertEqual(sorted(handle.namelist()), ["audio.mp3", "song.mc"])
 
     def test_the_tree_copy_never_overwrites_a_speed_changed_result(self):
-        """Each archive keeps its own name and its transformed contents."""
+        """Colliding archive outputs each keep their own transformed contents."""
         import zipfile
 
         with tempfile.TemporaryDirectory() as directory:
@@ -1949,12 +1964,12 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             controller.run(prepared, lambda *_args: None)
 
             result = out / "Odo 1.5x"
-            with zipfile.ZipFile(result / "pack.mcz") as handle:
-                self.assertEqual(sorted(handle.namelist()), ["audio.mp3", "song.mc"])
-                self.assertEqual(json.loads(handle.read("song.mc"))["time"][0]["bpm"], 270.0)
-            with zipfile.ZipFile(result / "pack 1.5x.mcz") as handle:
-                self.assertEqual(sorted(handle.namelist()), ["audio.mp3", "earlier.mc", "stale.txt"])
-                self.assertEqual(json.loads(handle.read("earlier.mc"))["time"][0]["bpm"], 270.0)
+            with zipfile.ZipFile(result / "pack 3 1.5x.mcz") as handle:
+                self.assertEqual(sorted(handle.namelist()), ["audio 1.5x.mp3", "song 1.5x.mc"])
+                self.assertEqual(json.loads(handle.read("song 1.5x.mc"))["time"][0]["bpm"], 270.0)
+            with zipfile.ZipFile(result / "pack 2 1.5x.mcz") as handle:
+                self.assertEqual(sorted(handle.namelist()), ["audio 1.5x.mp3", "earlier 1.5x.mc", "stale.txt"])
+                self.assertEqual(json.loads(handle.read("earlier 1.5x.mc"))["time"][0]["bpm"], 270.0)
                 self.assertEqual(handle.read("stale.txt"), b"an earlier result")
 
     def test_a_folder_holding_marked_files_does_not_overwrite_them(self):
@@ -1978,7 +1993,7 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
 
             result = out / "Odo 1.5x"
             versions = {}
-            for name in ("Hard.osu", "Hard 1.5x.osu"):
+            for name in ("Hard 2 1.5x.osu", "Hard 3 1.5x.osu"):
                 path = result / name
                 self.assertTrue(path.is_file(), name)
                 versions[name] = path.read_text(encoding="utf-8").split(
@@ -1990,7 +2005,7 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             )
             self.assertFalse((result / "Hard 1.5x 1.5x.osu").exists())
             self.assertEqual({p.name for p in result.glob("*.osu")},
-                             {"Hard.osu", "Hard 1.5x.osu"})
+                             {"Hard 2 1.5x.osu", "Hard 3 1.5x.osu"})
 
     def test_an_archive_picked_as_a_file_is_still_repacked(self):
         """Naming the archive itself is the one case that produces a new archive."""
@@ -2044,20 +2059,14 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             controller.run(prepared, lambda *_args: None)
             result = out / "Odo 1.5x"
             # The loose chart was speed-changed, not skipped in favour of the pack.
-            self.assertTrue((result / "Hard.osu").is_file())
-            self.assertTrue((result / "audio.mp3").is_file())
-            # The pack beside it is speed-changed too, keeping its name.
-            self.assertTrue((result / "pack.mcz").is_file())
-            self.assertFalse((result / "pack 1.5x.mcz").exists())
+            self.assertTrue((result / "Hard 1.5x.osu").is_file())
+            self.assertTrue((result / "audio 1.5x.mp3").is_file())
+            # The pack beside it and its members are renamed too.
+            self.assertTrue((result / "pack 1.5x.mcz").is_file())
+            self.assertFalse((result / "pack.mcz").exists())
 
-    def test_archive_member_names_survive_and_metadata_gains_the_marker(self):
-        """Archive members keep their complete names while chart metadata is marked.
-
-        Malody packs name members after internal ids and every difficulty of a
-        pack shares one song name, so the name is never replaced: the archive of
-        ``the world of scarlet`` holds ``0 1.1x.mc`` beside ``0 1.1x.ogg``, and
-        the two difficulties stay distinguishable by their own ids.
-        """
+    def test_archive_members_and_metadata_gain_the_marker(self):
+        """Members retain their distinct stems and gain the speed marker."""
         import zipfile
 
         with tempfile.TemporaryDirectory() as directory:
@@ -2104,24 +2113,24 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
                 self.assertEqual(
                     sorted(handle.namelist()),
                     [
-                        "0.mc",
-                        "0.ogg",
-                        "1.mc",
-                        "1.ogg",
+                        "0 1.1x.mc",
+                        "0 1.1x.ogg",
+                        "1 1.1x.mc",
+                        "1 1.1x.ogg",
                         "bg.jpg",
                     ],
                 )
-                payload = json.loads(handle.read("0.mc"))
-                second = json.loads(handle.read("1.mc"))
+                payload = json.loads(handle.read("0 1.1x.mc"))
+                second = json.loads(handle.read("1 1.1x.mc"))
             # Each chart points at the music renamed beside it, and the difficulty
             # name carries its own marker.
-            self.assertEqual(payload["meta"]["song"]["file"], "0.ogg")
+            self.assertEqual(payload["meta"]["song"]["file"], "0 1.1x.ogg")
             self.assertEqual(payload["meta"]["version"], "Sir This Way 1.1x")
-            self.assertEqual(second["meta"]["song"]["file"], "1.ogg")
+            self.assertEqual(second["meta"]["song"]["file"], "1 1.1x.ogg")
             self.assertEqual(second["meta"]["version"], "Another 1.1x")
 
     def test_existing_marked_member_names_survive_without_new_collisions(self):
-        """Distinct original member names stay distinct without extra counters.
+        """Distinct original member names stay distinct with collision counters.
 
         ``0.ogg`` beside an existing ``0 1.5x.ogg`` would collide once the marker
         is applied; the fallback counter goes *before* the marker, so nobody reads
@@ -2145,11 +2154,11 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             with zipfile.ZipFile(root / "pack 1.5x.osz") as handle:
                 self.assertEqual(
                     sorted(handle.namelist()),
-                    ["easy 1.5x.osu", "easy.osu"],
+                    ["easy 2 1.5x.osu", "easy 3 1.5x.osu"],
                 )
 
     def test_an_archive_keeps_a_meaningful_member_stem(self):
-        """Every archive member keeps its original file name."""
+        """Each difficulty keeps its own stem before the speed marker."""
         import zipfile
 
         with tempfile.TemporaryDirectory() as directory:
@@ -2169,9 +2178,9 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
                 # names survive and only the marker is added.
                 self.assertEqual(
                     sorted(handle.namelist()),
-                    ["easy.osu", "hard.osu"],
+                    ["easy 1.5x.osu", "hard 1.5x.osu"],
                 )
-                self.assertIn("Version:Easy 1.5x", handle.read("easy.osu").decode("utf-8"))
+                self.assertIn("Version:Easy 1.5x", handle.read("easy 1.5x.osu").decode("utf-8"))
 
     def test_an_archive_stays_an_archive_inside_its_folder(self):
         import zipfile
@@ -2206,11 +2215,11 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
                 # Every member keeps the name it was shipped with and only gains
                 # the marker, so the inside matches the marked archive name.
                 self.assertEqual(
-                    sorted(handle.namelist()), ["audio.mp3", "song.mc"]
+                    sorted(handle.namelist()), ["audio 1.5x.mp3", "song 1.5x.mc"]
                 )
-                payload = json.loads(handle.read("song.mc"))
+                payload = json.loads(handle.read("song 1.5x.mc"))
             self.assertEqual(payload["time"][0]["bpm"], 270.0)
-            self.assertEqual(payload["meta"]["song"]["file"], "audio.mp3")
+            self.assertEqual(payload["meta"]["song"]["file"], "audio 1.5x.mp3")
             # The source archive is unchanged.
             with zipfile.ZipFile(archive) as handle:
                 self.assertEqual(
@@ -2245,10 +2254,10 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
                 sorted(item.name for item in out.iterdir()), ["songs 1.1x"]
             )
             # A song folder is copied whole, with its own internal structure.
-            self.assertTrue((out / "songs 1.1x" / "Odo" / "Easy.osu").is_file())
-            self.assertTrue((out / "songs 1.1x" / "Ghost" / "Insane.osu").is_file())
+            self.assertTrue((out / "songs 1.1x" / "Odo" / "Easy 1.1x.osu").is_file())
+            self.assertTrue((out / "songs 1.1x" / "Ghost" / "Insane 1.1x.osu").is_file())
             self.assertTrue((out / "songs 1.1x" / "Odo" / "sub" / "extra.png").is_file())
-            # Only the copied outer folder gains the marker.
+            # The original library is not duplicated under an unmarked name.
             self.assertFalse((out / "songs").exists())
 
     def test_a_deeply_nested_song_keeps_its_folder_chain(self):
@@ -2295,14 +2304,14 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             for title in ("Song A", "Song B"):
                 with self.subTest(song=title):
                     result = out / "beatmap 1.5x" / title
-                    chart = result / "0" / "chart.mc"
+                    chart = result / "0" / "chart 1.5x.mc"
                     self.assertTrue(chart.is_file())
                     self.assertTrue((result / "cover.jpg").is_file())
-                    self.assertTrue((result / "audio.mp3").is_file())
+                    self.assertTrue((result / "audio 1.5x.mp3").is_file())
                     payload = json.loads(chart.read_text(encoding="utf-8"))
                     # The cross-folder reference still resolves after extraction.
                     reference = payload["meta"]["song"]["file"]
-                    self.assertEqual(reference, "../audio.mp3")
+                    self.assertEqual(reference, "../audio 1.5x.mp3")
                     self.assertTrue((chart.parent / reference).resolve().is_file())
             # No stray folder named after the intermediate directory.
             self.assertFalse((out / "0").exists())
@@ -2349,11 +2358,11 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in out.iterdir()), ["0 1.5x", "1 1.5x"])
             for level in ("0", "1"):
                 result = out / f"{level} 1.5x"
-                chart = result / "chart.mc"
+                chart = result / "chart 1.5x.mc"
                 self.assertTrue(chart.is_file())
-                self.assertTrue((result / "audio.mp3").is_file())
+                self.assertTrue((result / "audio 1.5x.mp3").is_file())
                 payload = json.loads(chart.read_text(encoding="utf-8"))
-                self.assertEqual(payload["meta"]["song"]["file"], "audio.mp3")
+                self.assertEqual(payload["meta"]["song"]["file"], "audio 1.5x.mp3")
                 self.assertEqual(payload["meta"]["song"]["title"], "Song A 1.5x")
                 self.assertEqual(payload["meta"]["version"], f"{level} 1.5x")
             self.assertTrue((library / "Song A" / "audio.mp3").is_file())
@@ -2372,8 +2381,8 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             controller.run(prepared, lambda *_args: None)
             destination = root / "songs 1.1x"
             self.assertEqual(prepared.params["planned_outputs"], [str(destination)])
-            self.assertTrue((destination / "Odo" / "Hard.osu").is_file())
-            self.assertTrue((destination / "Ghost" / "Insane.osu").is_file())
+            self.assertTrue((destination / "Odo" / "Hard 1.1x.osu").is_file())
+            self.assertTrue((destination / "Ghost" / "Insane 1.1x.osu").is_file())
             self.assertFalse((songs / "Odo" / "Hard 1.1x.osu").exists())
             self.assertFalse((songs / "Ghost" / "Insane 1.1x.osu").exists())
             self.assertFalse((root / "out").exists())
@@ -2489,7 +2498,7 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             self.assertIn("谱面已生成", joined)
             self.assertTrue(warnings, "失败必须在警告里出现，否则结果面板看不出问题")
             # The chart survives the failed track.
-            self.assertTrue((out / "Odo 1.5x" / "Hard.osu").is_file())
+            self.assertTrue((out / "Odo 1.5x" / "Hard 1.5x.osu").is_file())
             # Nothing was archived to disk: the log lives in the session only.
             self.assertEqual(
                 sorted(item.name for item in out.rglob("*") if item.suffix == ".log"),
@@ -2512,11 +2521,11 @@ class SpeedCollectionLayoutTests(unittest.TestCase):
             controller.run(prepared, lambda kind, payload: events.append((kind, payload)))
             logged = [payload for kind, payload in events if kind == "log"]
             self.assertTrue(
-                any("音乐已变速" in line and "audio.mp3" in line for line in logged),
+                any("音乐已变速" in line and "audio 1.5x.mp3" in line for line in logged),
                 logged,
             )
             self.assertTrue(
-                any("谱面已生成" in line and "Hard.osu" in line for line in logged),
+                any("谱面已生成" in line and "Hard 1.5x.osu" in line for line in logged),
                 logged,
             )
 
@@ -2739,16 +2748,16 @@ class SpeedFolderInputTests(unittest.TestCase):
             before = {p.relative_to(songs): p.read_bytes() for p in songs.rglob("*") if p.is_file()}
             controller.run(prepared, lambda *_args: None)
             for relative in (
-                "Odo/Easy.osu", "Odo/Hard.osu", "Ghost/Insane.osu",
-                "Odo/audio.mp3", "Ghost/audio.mp3",
+                "Odo/Easy 1.5x.osu", "Odo/Hard 1.5x.osu", "Ghost/Insane 1.5x.osu",
+                "Odo/audio 1.5x.mp3", "Ghost/audio 1.5x.mp3",
             ):
                 with self.subTest(relative=relative):
                     self.assertTrue((destination / relative).is_file(), relative)
             self.assertEqual({p.relative_to(songs): p.read_bytes() for p in songs.rglob("*") if p.is_file()}, before)
-            self.assertFalse((destination / "Ghost" / "Easy.osu").exists())
-            self.assertFalse((destination / "Odo" / "Insane.osu").exists())
+            self.assertFalse((destination / "Ghost" / "Easy 1.5x.osu").exists())
+            self.assertFalse((destination / "Odo" / "Insane 1.5x.osu").exists())
 
-    def test_a_folder_input_marks_metadata_and_preserves_internal_names(self):
+    def test_a_folder_input_marks_metadata_and_internal_names(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             songs = root / "Songs"
@@ -2758,10 +2767,10 @@ class SpeedFolderInputTests(unittest.TestCase):
                 {"input_paths": [str(songs)], "speed": 1.5}, context
             )
             controller.run(prepared, lambda *_args: None)
-            text = (root / "Songs 1.5x" / "Odo" / "Hard.osu").read_text(encoding="utf-8")
-            self.assertIn("AudioFilename: audio.mp3", text)
+            text = (root / "Songs 1.5x" / "Odo" / "Hard 1.5x.osu").read_text(encoding="utf-8")
+            self.assertIn("AudioFilename: audio 1.5x.mp3", text)
             self.assertIn("Version:Hard 1.5x", text)
-            self.assertTrue((root / "Songs 1.5x" / "Odo" / "audio.mp3").is_file())
+            self.assertTrue((root / "Songs 1.5x" / "Odo" / "audio 1.5x.mp3").is_file())
 
     def test_the_input_field_decides_whether_the_song_name_is_marked(self):
         """Folder field marks the song name; file field leaves it as authored.
@@ -2781,7 +2790,7 @@ class SpeedFolderInputTests(unittest.TestCase):
                 {"input_folders": str(folder), "speed": 1.5}, context
             )
             controller.run(prepared, lambda *_args: None)
-            from_folder = (songs / "Odo 1.5x" / "Hard.osu").read_text(encoding="utf-8")
+            from_folder = (songs / "Odo 1.5x" / "Hard 1.5x.osu").read_text(encoding="utf-8")
             self.assertIn("Title:Odo 1.5x", from_folder)
             self.assertIn("Version:Hard 1.5x", from_folder)
 
@@ -2844,8 +2853,8 @@ class SpeedFolderInputTests(unittest.TestCase):
             destination = root / "app" / "Songs 1.1x"
             self.assertEqual(prepared.params["planned_outputs"], [str(destination)])
             controller.run(prepared, lambda *_args: None)
-            self.assertTrue((destination / "Odo" / "Easy.osu").is_file())
-            self.assertTrue((destination / "Odo" / "Hard.osu").is_file())
+            self.assertTrue((destination / "Odo" / "Easy 1.1x.osu").is_file())
+            self.assertTrue((destination / "Odo" / "Hard 1.1x.osu").is_file())
             self.assertFalse((songs / "Odo" / "Easy 1.1x.osu").exists())
 
 
@@ -3182,8 +3191,8 @@ class SpeedPathResolutionTests(unittest.TestCase):
                 ),
             )
             controller.run(prepared, lambda *_args: None)
-            self.assertTrue((root / "Songs 1.5x" / "Odo" / "Hard.osu").is_file())
-            self.assertTrue((root / "Songs 1.5x" / "100%TEMP%" / "Hard.osu").is_file())
+            self.assertTrue((root / "Songs 1.5x" / "Odo" / "Hard 1.5x.osu").is_file())
+            self.assertTrue((root / "Songs 1.5x" / "100%TEMP%" / "Hard 1.5x.osu").is_file())
 
 
     def test_multi_select_results_are_never_glued_together(self):
@@ -3514,7 +3523,7 @@ class SpeedFolderMenuLayoutTests(unittest.TestCase):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"converted:" + Path(source).read_bytes())
 
-    def test_folder_names_and_metadata_use_settings_but_file_names_survive(self):
+    def test_folder_and_file_names_and_metadata_use_their_own_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Song.with.dot"
             root.mkdir()
@@ -3532,12 +3541,12 @@ class SpeedFolderMenuLayoutTests(unittest.TestCase):
             with patch("osu_toolbox.speed_change._AudioJobRegistry.ensure", self._fake_audio):
                 result = controller.run(prepared, lambda *_: None)
             self.assertEqual(result.data["paths"], [str(destination)])
-            text = (destination / "hard.osu").read_text(encoding="utf-8")
+            text = (destination / "hard [rate 1.1].osu").read_text(encoding="utf-8")
             self.assertIn("Title:T (1.1x)", text)
             self.assertIn("TitleUnicode:歌曲 (1.1x)", text)
             self.assertIn("Version:Hard (1.1x)", text)
-            self.assertIn("AudioFilename: song.wav", text)
-            self.assertEqual((destination / "song.wav").read_bytes(), b"converted:audio")
+            self.assertIn("AudioFilename: song [rate 1.1].wav", text)
+            self.assertEqual((destination / "song [rate 1.1].wav").read_bytes(), b"converted:audio")
             self.assertEqual((destination / "image.png").read_bytes(), b"image")
             self.assertTrue((destination / "Empty" / "Nested").is_dir())
             self.assertEqual((root / "hard.osu").read_text(encoding="utf-8"), original)
@@ -3568,18 +3577,24 @@ class SpeedFolderMenuLayoutTests(unittest.TestCase):
             out_song = destination / "Song"
             self.assertEqual(calls, [str(song / "shared.wav")])
             self.assertEqual((destination / "library.txt").read_bytes(), b"library note")
-            out_mc = json.loads((out_song / "0" / "0.mc").read_text(encoding="utf-8"))
+            out_mc = json.loads((out_song / "0" / "0 1.1x.mc").read_text(encoding="utf-8"))
             self.assertEqual(out_mc["meta"]["song"]["title"], "T 1.1x")
             self.assertEqual(out_mc["meta"]["version"], "Hard 1.1x")
-            self.assertEqual(out_mc["meta"]["song"]["file"], "../shared.wav")
-            out_sm = (out_song / "chart.sm").read_text(encoding="utf-8")
+            self.assertEqual(out_mc["meta"]["song"]["file"], "../shared 1.1x.wav")
+            out_sm = (out_song / "chart 1.1x.sm").read_text(encoding="utf-8")
             self.assertIn("#TITLE:Test 1.1x;", out_sm)
             self.assertIn("Hard 1.1x:", out_sm)
-            self.assertIn("#MUSIC:shared.wav;", out_sm)
+            self.assertIn("#MUSIC:shared 1.1x.wav;", out_sm)
+            renamed = {
+                Path("Song/hard.osu"): Path("Song/hard 1.1x.osu"),
+                Path("Song/chart.sm"): Path("Song/chart 1.1x.sm"),
+                Path("Song/0/0.mc"): Path("Song/0/0 1.1x.mc"),
+                Path("Song/shared.wav"): Path("Song/shared 1.1x.wav"),
+            }
             self.assertEqual({p.relative_to(destination) for p in destination.rglob("*")},
-                             {p.relative_to(root) for p in root.rglob("*")})
+                             {renamed.get(p.relative_to(root), p.relative_to(root)) for p in root.rglob("*")})
 
-    def test_archive_member_paths_and_unreferenced_assets_keep_their_names(self):
+    def test_archive_members_are_renamed_with_paths_and_other_assets_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Packs"
             root.mkdir()
@@ -3602,21 +3617,25 @@ class SpeedFolderMenuLayoutTests(unittest.TestCase):
             for extension, chart_name in ((".osz", "easy.osu"), (".mcz", "0.mc")):
                 with zipfile.ZipFile(root / ("pack" + extension)) as original:
                     names = original.namelist()
-                with zipfile.ZipFile(destination / ("pack" + extension)) as handle:
-                    self.assertEqual(set(handle.namelist()), set(names))
-                    self.assertEqual(handle.read("song.wav"), b"converted:audio")
+                with zipfile.ZipFile(destination / ("pack 1.1x" + extension)) as handle:
+                    renamed = {
+                        "charts/" + chart_name: "charts/" + Path(chart_name).stem + " 1.1x" + Path(chart_name).suffix,
+                        "song.wav": "song 1.1x.wav",
+                    }
+                    self.assertEqual(set(handle.namelist()), {renamed.get(name, name) for name in names})
+                    self.assertEqual(handle.read("song 1.1x.wav"), b"converted:audio")
                     self.assertEqual(handle.read("unused.wav"), b"unused")
                     self.assertEqual(handle.read("art/image.png"), b"image")
-                    text = handle.read("charts/" + chart_name).decode("utf-8")
+                    text = handle.read(renamed["charts/" + chart_name]).decode("utf-8")
                     if extension == ".osz":
                         self.assertIn("Title:T 1.1x", text)
                         self.assertIn("Version:Hard 1.1x", text)
-                        self.assertIn("AudioFilename: ../song.wav", text)
+                        self.assertIn("AudioFilename: ../song 1.1x.wav", text)
                     else:
                         data = json.loads(text)
                         self.assertEqual(data["meta"]["song"]["title"], "T 1.1x")
                         self.assertEqual(data["meta"]["version"], "Hard 1.1x")
-                        self.assertEqual(data["meta"]["song"]["file"], "../song.wav")
+                        self.assertEqual(data["meta"]["song"]["file"], "../song 1.1x.wav")
 
     def test_numbered_storage_folder_brings_its_parent_audio_into_the_new_folder(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3632,9 +3651,9 @@ class SpeedFolderMenuLayoutTests(unittest.TestCase):
                 controller.run(prepared, lambda *_: None)
             destination = song / "0 1.1x"
             self.assertEqual(prepared.params["planned_outputs"], [str(destination)])
-            self.assertEqual((destination / "song.mp3").read_bytes(), b"converted:audio")
-            result = json.loads((destination / "0.mc").read_text(encoding="utf-8"))
-            self.assertEqual(result["meta"]["song"]["file"], "song.mp3")
+            self.assertEqual((destination / "song 1.1x.mp3").read_bytes(), b"converted:audio")
+            result = json.loads((destination / "0 1.1x.mc").read_text(encoding="utf-8"))
+            self.assertEqual(result["meta"]["song"]["file"], "song 1.1x.mp3")
             self.assertEqual((song / "song.mp3").read_bytes(), b"audio")
 
     def test_existing_folders_and_files_are_skipped_with_a_counter_before_marker(self):
@@ -3686,7 +3705,7 @@ class SpeedFolderMenuLayoutTests(unittest.TestCase):
                 "speed_file_suffix": " ({num}x)", "speed_difficulty_marker": "",
             })
             controller.run(prepared, lambda *_: None)
-            text = (root.parent / "Song (1.1x)" / "hard.osu").read_text(encoding="utf-8")
+            text = (root.parent / "Song (1.1x)" / "hard (1.1x).osu").read_text(encoding="utf-8")
             self.assertIn("Title:T (1.1x)", text)
             self.assertIn("Version:Hard (1.1x)", text)
 
@@ -3723,18 +3742,97 @@ class SpeedFolderMenuLayoutTests(unittest.TestCase):
                                  str(source)], stdout=io.StringIO(), stderr=error)
                     self.assertEqual(code, 0, error.getvalue())
             destination = root.parent / "Song [1.1x]"
+            renamed = {
+                "Charts/easy.osu": "Charts/easy [1.1x].osu",
+                "Charts/hard.mc": "Charts/hard [1.1x].mc",
+                "Charts/chart.sm": "Charts/chart [1.1x].sm",
+                "Assets/song.wav": "Assets/song [1.1x].wav",
+            }
             with zipfile.ZipFile(root.parent / "Song [1.1x].osz") as handle:
-                self.assertEqual({name for name in handle.namelist() if not name.endswith("/")}, set(original))
+                self.assertEqual({name for name in handle.namelist() if not name.endswith("/")},
+                                 {renamed.get(name, name) for name in original})
                 self.assertIn("Empty/", handle.namelist())
                 for name in original:
-                    folder_bytes = (destination / name).read_bytes()
-                    archive_content = handle.read(name)
+                    folder_bytes = (destination / renamed.get(name, name)).read_bytes()
+                    archive_content = handle.read(renamed.get(name, name))
                     if name.endswith((".osu", ".mc", ".sm")):
                         self.assertEqual(folder_bytes.splitlines(), archive_content.splitlines(), name)
                     else:
                         self.assertEqual(folder_bytes, archive_content, name)
             self.assertEqual({p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}, original)
             self.assertEqual(archive.read_bytes(), archive_bytes)
+
+    def test_collision_names_and_audio_references_match_the_preview_for_folders_and_archives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Song"
+            root.mkdir()
+            (root / "hard.osu").write_text(
+                _osu_text().replace("Version:Hard", "Version:Hard\nBeatmapID:123456\nBeatmapSetID:654321"),
+                encoding="utf-8",
+            )
+            (root / "hard 1.1x.osu").write_text(
+                _osu_text(audio="song 1.1x.wav", version="Previous"), encoding="utf-8"
+            )
+            (root / "song.wav").write_bytes(b"original")
+            (root / "song 1.1x.wav").write_bytes(b"previous")
+            originals = {p.name: p.read_bytes() for p in root.iterdir()}
+            archive = root.with_suffix(".osz")
+            with zipfile.ZipFile(archive, "w") as handle:
+                for name, content in originals.items():
+                    handle.writestr(name, content)
+            controller, prepared = self._prepare(root)
+            archive_plan = plan_speed_change(
+                [archive], 1.1, file_pattern=" {num}x", difficulty_pattern=" {num}x"
+            )
+            calls = []
+
+            def convert(registry, source, target):
+                calls.append(Path(source).name)
+                self._fake_audio(registry, source, target)
+
+            with patch("osu_toolbox.speed_change._AudioJobRegistry.ensure", convert):
+                result = controller.run(prepared, lambda *_: None)
+                converted = change_speed(
+                    [archive], 1.1, file_pattern=" {num}x", difficulty_pattern=" {num}x"
+                )
+            self.assertEqual(result.data["errors"], [])
+            self.assertEqual(converted["failures"], [])
+            self.assertCountEqual(calls, ["song.wav", "song 1.1x.wav"] * 2)
+            expected_names = {
+                "hard 2 1.1x.osu", "hard 3 1.1x.osu",
+                "song 2 1.1x.wav", "song 3 1.1x.wav",
+            }
+            destination = Path(result.data["paths"][0])
+            self.assertEqual({p.name for p in destination.iterdir()}, expected_names)
+            planned_names = {
+                Path(path).name for kind, path in prepared.params["plan"][0]["rows"]
+                if kind in ("谱面", "音乐")
+            }
+            self.assertEqual(planned_names, expected_names)
+            planned_members = {
+                path.removeprefix("（归档内）") for kind, path in archive_plan[0]["rows"]
+                if kind in ("谱面", "音乐")
+            }
+            self.assertEqual(planned_members, expected_names)
+            with zipfile.ZipFile(archive.with_name("Song 1.1x.osz")) as handle:
+                self.assertEqual(set(handle.namelist()), expected_names)
+                self.assertEqual(len(handle.namelist()), len(expected_names))
+                for name in expected_names:
+                    folder_content = (destination / name).read_bytes()
+                    if name.endswith(".osu"):
+                        self.assertEqual(folder_content.splitlines(), handle.read(name).splitlines())
+                        text = folder_content.decode("utf-8")
+                        reference = next(line.split(":", 1)[1].strip() for line in text.splitlines()
+                                         if line.startswith("AudioFilename:"))
+                        expected_audio = b"converted:previous" if "Version:Previous" in text else b"converted:original"
+                        if "Version:Hard" in text:
+                            self.assertIn("BeatmapID:0", text.splitlines())
+                            self.assertIn("BeatmapSetID:-1", text.splitlines())
+                        self.assertEqual((destination / reference).read_bytes(), expected_audio)
+                        self.assertEqual(handle.read(reference), expected_audio)
+                    else:
+                        self.assertEqual(folder_content, handle.read(name))
+            self.assertEqual({p.name: p.read_bytes() for p in root.iterdir()}, originals)
 
     def test_a_loose_chart_matching_an_archive_member_is_processed_too(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3749,9 +3847,9 @@ class SpeedFolderMenuLayoutTests(unittest.TestCase):
             with patch("osu_toolbox.speed_change._AudioJobRegistry.ensure", self._fake_audio):
                 controller.run(prepared, lambda *_: None)
             destination = root.parent / "Song 1.1x"
-            self.assertIn("Version:Loose 1.1x", (destination / "easy.osu").read_text(encoding="utf-8"))
-            with zipfile.ZipFile(destination / "pack.osz") as handle:
-                self.assertIn("Version:Packed 1.1x", handle.read("easy.osu").decode("utf-8"))
+            self.assertIn("Version:Loose 1.1x", (destination / "easy 1.1x.osu").read_text(encoding="utf-8"))
+            with zipfile.ZipFile(destination / "pack 1.1x.osz") as handle:
+                self.assertIn("Version:Packed 1.1x", handle.read("easy 1.1x.osu").decode("utf-8"))
 
 
     def test_audio_failure_preserves_original_music_and_reports_incomplete_outputs(self):
@@ -3782,11 +3880,11 @@ class SpeedFolderMenuLayoutTests(unittest.TestCase):
                     self.assertEqual(icon, 0x10)
             destination = root.parent / "Song 1.1x"
             self.assertEqual((destination / "song.wav").read_bytes(), b"original audio")
-            self.assertIn("AudioFilename: song.wav", (destination / "hard.osu").read_text(encoding="utf-8"))
+            self.assertIn("AudioFilename: song.wav", (destination / "hard 1.1x.osu").read_text(encoding="utf-8"))
             with zipfile.ZipFile(root.parent / "Song 1.1x.osz") as handle:
                 self.assertEqual(handle.read("song.wav"), b"original audio")
-                self.assertEqual(handle.read("hard.osu").splitlines(),
-                                 (destination / "hard.osu").read_bytes().splitlines())
+                self.assertEqual(handle.read("hard 1.1x.osu").splitlines(),
+                                 (destination / "hard 1.1x.osu").read_bytes().splitlines())
             self.assertEqual((root / "song.wav").read_bytes(), b"original audio")
 
     def test_core_rejects_a_copied_folder_destination_inside_the_original(self):
@@ -3819,10 +3917,14 @@ class SpeedFolderMenuLayoutTests(unittest.TestCase):
                              "--target-format", "1.1", str(source)], stdout=io.StringIO())
             self.assertEqual(code, 0)
             with zipfile.ZipFile(source.parent / "pack 1.1x.osz") as handle:
-                self.assertEqual(set(handle.namelist()), names)
+                self.assertEqual(set(handle.namelist()), {
+                    "charts/easy 1.1x.osu", "./audio/song 1.1x.wav", "other.wav",
+                })
                 self.assertEqual(len(handle.namelist()), len(names))
-                self.assertEqual(handle.read("./audio/song.wav"), b"converted:audio")
-                self.assertIn("Version:Hard 1.1x", handle.read(next(member for member in names if member.replace("\\", "/").endswith("/easy.osu"))).decode("utf-8"))
+                self.assertEqual(handle.read("./audio/song 1.1x.wav"), b"converted:audio")
+                text = handle.read("charts/easy 1.1x.osu").decode("utf-8")
+                self.assertIn("Version:Hard 1.1x", text)
+                self.assertIn("AudioFilename: ../audio/song 1.1x.wav", text)
 
 
 class SpeedCommandLineTests(unittest.TestCase):
@@ -3956,12 +4058,12 @@ class SpeedCommandLineTests(unittest.TestCase):
             self.assertEqual(code, 0, error.getvalue())
             destination = root.parent / f"{root.name} 1.5x"
             output_song = destination / "Song"
-            marked = output_song / "hard.osu"
+            marked = output_song / "hard 1.5x.osu"
             self.assertEqual(json.loads(out.getvalue())["outputs"], [str(destination)])
             self.assertTrue(marked.is_file())
             self.assertIn("Title:Song 1.5x", marked.read_text(encoding="utf-8"))
             self.assertIn("Version:Hard 1.5x", marked.read_text(encoding="utf-8"))
-            self.assertIn("AudioFilename: song.wav", marked.read_text(encoding="utf-8"))
+            self.assertIn("AudioFilename: song 1.5x.wav", marked.read_text(encoding="utf-8"))
             self.assertIn("64,192,667,", marked.read_text(encoding="utf-8"))
             self.assertEqual((output_song / "cover.png").read_bytes(), b"cover")
             def decoded_samples(path):
@@ -3970,16 +4072,21 @@ class SpeedCommandLineTests(unittest.TestCase):
                                          capture_output=True)
                 self.assertEqual(decoded.returncode, 0, decoded.stderr)
                 return len(decoded.stdout) // 2
-            self.assertLess(decoded_samples(output_song / "song.wav"), decoded_samples(audio) * .8)
-            with zipfile.ZipFile(output_song / "Nested" / "pack.osz") as handle:
-                self.assertEqual(set(handle.namelist()), {"easy.osu", "song.wav"})
-                text = handle.read("easy.osu").decode("utf-8")
+            self.assertLess(decoded_samples(output_song / "song 1.5x.wav"), decoded_samples(audio) * .8)
+            with zipfile.ZipFile(output_song / "Nested" / "pack 1.5x.osz") as handle:
+                self.assertEqual(set(handle.namelist()), {"easy 1.5x.osu", "song 1.5x.wav"})
+                text = handle.read("easy 1.5x.osu").decode("utf-8")
                 self.assertIn("Version:Easy 1.5x", text)
                 self.assertIn("Title:Song 1.5x", text)
-                self.assertIn("AudioFilename: song.wav", text)
+                self.assertIn("AudioFilename: song 1.5x.wav", text)
             self.assertEqual({p: p.read_bytes() for p in root.rglob("*") if p.is_file()}, before)
+            renamed = {
+                Path("Song/hard.osu"): Path("Song/hard 1.5x.osu"),
+                Path("Song/song.wav"): Path("Song/song 1.5x.wav"),
+                Path("Song/Nested/pack.osz"): Path("Song/Nested/pack 1.5x.osz"),
+            }
             self.assertEqual({p.relative_to(destination) for p in destination.rglob("*") if p.is_file()},
-                             {p.relative_to(root) for p in before})
+                             {renamed.get(p.relative_to(root), p.relative_to(root)) for p in before})
             outputs = {p: p.read_bytes() for p in destination.rglob("*") if p.is_file()}
             again = io.StringIO()
             code = main(["--context", "shell", "--operation", "folder-speed-change",
@@ -3987,7 +4094,7 @@ class SpeedCommandLineTests(unittest.TestCase):
             self.assertEqual(code, 0, error.getvalue())
             second = root.parent / f"{root.name} 2 1.5x"
             self.assertEqual(json.loads(again.getvalue())["outputs"], [str(second)])
-            self.assertTrue((second / "Song" / "hard.osu").is_file())
+            self.assertTrue((second / "Song" / "hard 1.5x.osu").is_file())
             for path, content in outputs.items():
                 self.assertEqual(path.read_bytes(), content)
             self.assertEqual({p: p.read_bytes() for p in root.rglob("*") if p.is_file()}, before)
@@ -4087,10 +4194,10 @@ class SpeedCommandLineTests(unittest.TestCase):
             with zipfile.ZipFile(marked) as archive:
                 self.assertEqual(
                     sorted(archive.namelist()),
-                    ["easy.osu", "hard.osu", "song.wav"],
+                    ["easy 0.9x.osu", "hard 0.9x.osu", "song 0.9x.wav"],
                 )
-                chart = archive.read("easy.osu").decode("utf-8")
-            self.assertIn("AudioFilename: song.wav", chart)
+                chart = archive.read("easy 0.9x.osu").decode("utf-8")
+            self.assertIn("AudioFilename: song 0.9x.wav", chart)
             self.assertIn("Version:Easy 0.9x", chart)
             self.assertIn("Title:T 0.9x", chart)
             # The source archive keeps its original chart and audio names.
