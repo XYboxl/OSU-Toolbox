@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="pyproject.toml"><img src="https://img.shields.io/badge/version-0.3.2-9088DD?style=flat" alt="项目版本：0.3.3"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/version-0.3.3-9088DD?style=flat" alt="项目版本：0.3.3"></a>
   <a href="#从源码运行"><img src="https://img.shields.io/badge/Python-3.9%2B-3776AB?style=flat&amp;logo=python&amp;logoColor=white" alt="Python 3.9 及以上"></a>
   <a href="#windows-发行包"><img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat" alt="平台：Windows"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2E7D5B?style=flat" alt="许可证：MIT"></a>
