@@ -47,7 +47,7 @@
 
 请保留同目录的 `osu-toolbox-menu.exe`、`_main` 与 `_menu` 文件夹；右键菜单使用独立的菜单程序。不要只复制两个 EXE。
 
-图形界面需要 Microsoft Edge WebView2 Runtime。视频渲染与音频变速还需要 FFmpeg：**发行包不附带 FFmpeg**，请自行安装并将其加入系统 `PATH`或放入`osu-toolbox.exe`同级目录下。
+图形界面需要 Microsoft Edge WebView2 Runtime。视频渲染与音频变速还需要 FFmpeg：**发行包不附带 FFmpeg**，请将 `ffmpeg.exe` 放在 `osu-toolbox.exe` 同级目录下，或将其所在目录加入系统 `PATH`。程序优先使用同目录的 FFmpeg，其次查找 `PATH`；找不到时会提示缺失并停止本次变速或视频导出。
 
 ### 从源码运行
 

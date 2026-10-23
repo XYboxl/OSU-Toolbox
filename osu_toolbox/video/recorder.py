@@ -8,14 +8,10 @@ from queue import Empty, Full, Queue
 import numpy as np
 
 from .. import config
+from ..external_tools import require_ffmpeg
 
 
 class VideoRecorder:
-    COMMON_PATHS = [
-        r"e:\c++\MapSpeed\ffmpeg.exe",
-        r"e:\python\MOToolPack\IOMusic\ffmpeg.exe",
-    ]
-
     ENCODER_CMDS = {
         "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p1", "-pix_fmt", "yuv420p"],
         "h264_qsv": ["-c:v", "h264_qsv", "-preset", "veryfast"],
@@ -29,22 +25,13 @@ class VideoRecorder:
 
     @staticmethod
     def _find_ffmpeg():
-        import shutil
-        exe = shutil.which("ffmpeg")
-        if exe:
-            return exe
-        local = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "ffmpeg.exe")
-        if os.path.exists(local):
-            return local
-        for p in VideoRecorder.COMMON_PATHS:
-            if os.path.exists(p):
-                return p
-        return "ffmpeg"
+        return require_ffmpeg()
 
     @staticmethod
     def _detect_hw_encoders():
-        ffmpeg = VideoRecorder._find_ffmpeg()
-        if not ffmpeg or ffmpeg == "ffmpeg":
+        try:
+            ffmpeg = VideoRecorder._find_ffmpeg()
+        except FileNotFoundError:
             return []
         try:
             out = subprocess.run(

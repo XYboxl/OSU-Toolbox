@@ -7,6 +7,7 @@
 """
 
 import ast
+import re
 import unittest
 from pathlib import Path
 
@@ -50,6 +51,16 @@ def _iter_imports(tree, module, path):
 
 
 class ArchitectureConstraintTests(unittest.TestCase):
+    def test_production_code_has_no_hardcoded_absolute_machine_paths(self):
+        for path in PACKAGE.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    self.assertIsNone(
+                        re.match(r"^(?:[A-Za-z]:[\\/]|/(?:home|Users|mnt|tmp)/)", node.value),
+                        f"{path.relative_to(ROOT)}:{node.lineno} contains an absolute machine path",
+                    )
+
     def _module_files(self):
         files = {}
         for path in PACKAGE.rglob("*.py"):

@@ -797,19 +797,18 @@ def _replace_mc_audio_paths(node, old_reference, new_reference):
 
 def find_ffmpeg():
     """Locate FFmpeg without importing the video stack."""
-    import shutil
+    from .external_tools import find_ffmpeg as locate_ffmpeg
 
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
-    local = Path(__file__).resolve().parent.parent / "ffmpeg.exe"
-    if local.is_file():
-        return str(local)
-    try:
-        from .video.recorder import VideoRecorder
-    except Exception:
-        return "ffmpeg"
-    return VideoRecorder._find_ffmpeg()
+    return locate_ffmpeg()
+
+
+def _require_ffmpeg():
+    from .external_tools import FFMPEG_NOT_FOUND_MESSAGE
+
+    executable = find_ffmpeg()
+    if executable is None:
+        raise SpeedChangeError(FFMPEG_NOT_FOUND_MESSAGE)
+    return executable
 
 
 def _audio_encoder(extension):
@@ -823,8 +822,8 @@ _STREAM_BITRATE = re.compile(r"Audio:.*?(\d+)\s*kb/s")
 def probe_audio(ffmpeg, path):
     """Return ``(sample_rate, bitrate)`` for a file's first audio stream.
 
-    The bundled FFmpeg has no ``ffprobe`` beside it, so the stream header that
-    ``ffmpeg -i`` prints to stderr is parsed instead.  ``sample_rate`` has to be
+    Read the stream header from ``ffmpeg -i`` without requiring a separate
+    ``ffprobe`` executable.  ``sample_rate`` has to be
     a concrete number: this build evaluates ``asetrate``'s expression with a
     variable table that does not know ``sample_rate``.
 
@@ -838,6 +837,10 @@ def probe_audio(ffmpeg, path):
             capture_output=True,
             timeout=_FFMPEG_PROBE_TIMEOUT_SEC,
         )
+    except FileNotFoundError as exc:
+        from .external_tools import FFMPEG_NOT_FOUND_MESSAGE
+
+        raise SpeedChangeError(FFMPEG_NOT_FOUND_MESSAGE) from exc
     except (OSError, subprocess.SubprocessError):
         return None, None
     text = (completed.stderr or b"").decode("utf-8", errors="replace")
@@ -974,11 +977,12 @@ def resample_audio(
     source, destination = Path(source), Path(destination)
     if source.resolve() == destination.resolve():
         raise SpeedChangeError("变速输出不能覆盖原音乐")
+    executable = ffmpeg or _require_ffmpeg()
     destination.parent.mkdir(parents=True, exist_ok=True)
     with _staged_output(destination, True) as staged:
         _resample_audio_file(
             source, staged, speed, cancel_event=cancel_event,
-            ffmpeg=ffmpeg, keep_pitch=keep_pitch,
+            ffmpeg=executable, keep_pitch=keep_pitch,
         )
         _check_cancelled(cancel_event)
     return destination
@@ -997,7 +1001,7 @@ def _resample_audio_file(
     destination = Path(destination)
     if not source.is_file():
         raise SpeedChangeError(f"音频文件不存在：{source}")
-    executable = ffmpeg or find_ffmpeg()
+    executable = ffmpeg or _require_ffmpeg()
     extension = destination.suffix.lower()
     sample_rate, probed = probe_audio(executable, source)
     if not sample_rate:
@@ -2819,6 +2823,7 @@ def _change_speed_to_collection(
             ] if folder_patterns["file_marker"] else [],
         })
     _check_cancelled(cancel_event)
+    registry = _AudioJobRegistry(_require_ffmpeg(), speed, cancel_event, keep_pitch, allow_overwrite)
     claimed = []
     try:
         for folder in folders:
@@ -2834,7 +2839,6 @@ def _change_speed_to_collection(
             except OSError:
                 pass
         raise
-    registry = _AudioJobRegistry(find_ffmpeg(), speed, cancel_event, keep_pitch, allow_overwrite)
     # Concurrency follows the amount of *work*, not the number of selections: a
     # single chosen folder may hold twenty songs, and sizing the pool by the
     # folder count left all twenty tracks transcoding one after another.
@@ -3101,7 +3105,7 @@ def change_speed(
         # collection: only those mark the song name.
         "folders_selected": tuple(folders_selected or ()),
     }
-    registry = _AudioJobRegistry(find_ffmpeg(), speed, cancel_event, keep_pitch, allow_overwrite)
+    registry = _AudioJobRegistry(_require_ffmpeg(), speed, cancel_event, keep_pitch, allow_overwrite)
     workers = max_workers or _worker_count(len(sources))
     results = [None] * len(sources)
     total = max(1, len(sources))

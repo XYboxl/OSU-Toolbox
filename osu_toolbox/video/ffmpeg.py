@@ -749,6 +749,7 @@ def render_frame_states_to_video(
                 pass
 
     _raise_if_cancelled(cancel_event)
+    VideoRecorder._find_ffmpeg()
     output_file = resolve_output_path(output_file)
     output_dir = os.path.dirname(output_file) or os.getcwd()
     created_output_dirs = []
